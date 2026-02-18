@@ -25,6 +25,9 @@ from reportlab.lib import colors
 from reportlab.lib.units import cm
 from reportlab.pdfbase.ttfonts import TTFont
 from dotenv import load_dotenv
+from flask import Flask
+
+app = Flask(__name__)
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -39,6 +42,8 @@ APPLICANT_OGRNIP = os.getenv('APPLICANT_OGRNIP')
 OGRNIP_BIRTH = os.getenv('OGRNIP_BIRTH')
 APPLICANT_PHONE = os.getenv('APPLICANT_PHONE')
 APPLICANT_EMAIL = os.getenv('APPLICANT_EMAIL')
+
+
 
 # Настройки
 API_URL = 'https://api-cloud.ru/api/bankrot.php'
@@ -370,3 +375,6 @@ if __name__ == '__main__':
     import sys
     test_mode = '--test' in sys.argv
     asyncio.run(main(test_mode=test_mode))
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
+
