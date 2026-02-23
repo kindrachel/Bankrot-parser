@@ -25,6 +25,8 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.lib import colors
 from reportlab.lib.units import cm
 from reportlab.pdfbase.ttfonts import TTFont
+from aiohttp import web
+import signal
 
 # Импорт парсера (обязательный)
 try:
@@ -256,23 +258,55 @@ async def process_new_lot(session, trustee_name, case_info, seen_cases):
     except Exception as e:
         print(f"Ошибка обработки лота: {e}")
 
+async def run_http_server():
+    app = web.Application()
+    app.router.add_get('/health', handle_health)
+    app.router.add_get('/status', handle_status)
+    app.router.add_get('/', handle_health)  # Корневой путь тоже отдаём статус
+    
+    port = int(os.environ.get('PORT', 10000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"✓ HTTP сервер запущен на порту {port} для Render health checks")
+    return runner
+
 # Основной цикл с использованием парсера
 async def main(test_mode=False):
     print("=== BankrotParser v1.1 ===")
     print("=== Запуск с использованием парсера fedresurs.ru ===")
-    print(f"Дата фильтра: не ранее {MIN_DATE.strftime('%d.%m.%Y')}")
-    print(f"Управляющие: {len(TRUSTEE_NAMES)}")
+    
+    # Запускаем HTTP сервер для Render
+    http_runner = await run_http_server()
     
     if not PARSER_AVAILABLE:
         print("✗ Парсер недоступен. Установите зависимости: pip install selenium webdriver-manager")
+        # Держим сервер запущенным даже без парсера, чтобы Render не падал
+        while True:
+            await asyncio.sleep(10)
         return
     
+    print(f"Дата фильтра: не ранее {MIN_DATE.strftime('%d.%m.%Y')}")
+    print(f"Управляющие: {len(TRUSTEE_NAMES)}")
+    
     seen_cases = load_seen_cases()
+    
+    # Обработка сигналов завершения
+    loop = asyncio.get_running_loop()
+    stop_signal = asyncio.Event()
+    
+    def signal_handler():
+        print("\n⚠️ Получен сигнал завершения, останавливаемся...")
+        stop_signal.set()
+    
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, signal_handler)
     
     async with aiohttp.ClientSession() as session:
         iterations = 0
         
-        while True:
+        while not stop_signal.is_set():
             print(f"\n--- Итерация {iterations + 1} ---")
             
             # Получаем торги через парсер
@@ -292,8 +326,26 @@ async def main(test_mode=False):
             if test_mode and iterations >= 2:
                 break
             
-            # Проверка каждые 5 минут (300 секунд)
-            await asyncio.sleep(300)
+            # Проверка с возможностью досрочного выхода
+            for _ in range(300):  # 300 секунд с проверкой stop_signal
+                if stop_signal.is_set():
+                    break
+                await asyncio.sleep(1)
+    
+    # Очистка перед выходом
+    await http_runner.cleanup()
+    print("✅ Сервис остановлен")
+
+async def handle_health(request):
+    return web.Response(text="BankrotParser is running")
+
+async def handle_status(request):
+    return web.json_response({
+        "status": "running",
+        "service": "BankrotParser",
+        "parser_available": PARSER_AVAILABLE
+    })
+
 
 # Точка входа
 if __name__ == '__main__':
